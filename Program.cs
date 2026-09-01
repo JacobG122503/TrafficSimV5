@@ -271,20 +271,41 @@ sealed class TrafficSimulation
 
     private void DetectCollisions()
     {
-        for (var first = 0; first < cars.Count; first++)
+        bool overlapFound = true;
+        int iterations = 0;
+
+        while (overlapFound && iterations < 10)
         {
-            for (var second = first + 1; second < cars.Count; second++)
+            overlapFound = false;
+            iterations++;
+
+            for (var first = 0; first < cars.Count; first++)
             {
-                var a = cars[first];
-                var b = cars[second];
-
-                if (a.State == CarState.Crashed && b.State == CarState.Crashed)
-                    continue;
-
-                if (Math.Abs(a.X - b.X) < 1.0 && Math.Abs(a.Y - b.Y) < 1.0)
+                for (var second = first + 1; second < cars.Count; second++)
                 {
-                    a.State = CarState.Crashed;
-                    b.State = CarState.Crashed;
+                    var a = cars[first];
+                    var b = cars[second];
+
+                    bool proximity = Math.Abs(a.X - b.X) < 0.8 && Math.Abs(a.Y - b.Y) < 0.8;
+                    bool exactOverlap = (int)Math.Round(a.X) == (int)Math.Round(b.X) && (int)Math.Round(a.Y) == (int)Math.Round(b.Y);
+
+                    if (proximity || exactOverlap)
+                    {
+                        a.State = CarState.Crashed;
+                        b.State = CarState.Crashed;
+                    }
+
+                    if (exactOverlap)
+                    {
+                        overlapFound = true;
+                        switch (a.CurrentDirection)
+                        {
+                            case Direction.North: a.Y += 1.0; break;
+                            case Direction.East: a.X -= 1.0; break;
+                            case Direction.South: a.Y -= 1.0; break;
+                            case Direction.West: a.X += 1.0; break;
+                        }
+                    }
                 }
             }
         }
@@ -512,7 +533,7 @@ static class Program
         Console.Write("Number of lanes per direction (1 to 4): ");
         var input = Console.ReadLine();
 
-        if (!int.TryParse(input, out var lanes) || lanes is < 1 or > 4)
+        if (!int.TryParse(input, out var lanes) || lanes is < 1 || lanes > 4)
         {
             Console.WriteLine("Please enter a whole number from 1 to 4.");
             return;

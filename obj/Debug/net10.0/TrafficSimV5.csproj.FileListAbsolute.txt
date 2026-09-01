@@ -12,3 +12,4 @@
 /Users/jacobg/Projects/Personal/TrafficSimV5/obj/Debug/net10.0/TrafficSimV5.pdb
 /Users/jacobg/Projects/Personal/TrafficSimV5/obj/Debug/net10.0/TrafficSimV5.genruntimeconfig.cache
 /Users/jacobg/Projects/Personal/TrafficSimV5/obj/Debug/net10.0/ref/TrafficSimV5.dll
+/Users/jacobg/Projects/Personal/TrafficSimV5/obj/Debug/net10.0/TrafficSimV5.sourcelink.json
