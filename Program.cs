@@ -133,9 +133,9 @@ sealed class TrafficSimulation
         simulatedSeconds += delta * 60;
         
         double currentSpawnInterval = 1.0 / carsPerSecond;
-        if (spawnTime >= currentSpawnInterval)
+        while (spawnTime >= currentSpawnInterval)
         {
-            spawnTime = 0;
+            spawnTime -= currentSpawnInterval;
             SpawnCars();
         }
 
