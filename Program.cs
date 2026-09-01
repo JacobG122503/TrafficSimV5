@@ -27,6 +27,16 @@ enum CarState
     Crashed
 }
 
+enum LightPhase
+{
+    NorthSouthGreen,
+    NorthSouthYellow,
+    AllRed1,
+    EastWestGreen,
+    EastWestYellow,
+    AllRed2
+}
+
 sealed class Car
 {
     public int Id { get; init; }
@@ -60,6 +70,7 @@ sealed class TrafficSimulation
     private readonly Random random = new();
     private readonly List<Car> cars = new();
     private readonly int lanes;
+    private readonly int mode;
     private readonly int width;
     private readonly int height;
     private readonly int centerX;
@@ -71,10 +82,14 @@ sealed class TrafficSimulation
     private double carsPerSecond = 1.25;
     private double simulatedSeconds;
     private int nextId = 1;
+    
+    private LightPhase phase = LightPhase.NorthSouthGreen;
+    private double phaseTimer;
 
-    public TrafficSimulation(int lanes)
+    public TrafficSimulation(int lanes, int mode)
     {
         this.lanes = lanes;
+        this.mode = mode;
         width = Math.Max(70, Console.WindowWidth - 1);
         height = Math.Max(26, Console.WindowHeight - 1);
         centerX = width / 2;
@@ -82,15 +97,14 @@ sealed class TrafficSimulation
         roadHalfWidth = lanes * 2;
     }
 
-    public void Run()
+    public bool Run()
     {
         Console.CursorVisible = false;
         Console.BackgroundColor = ConsoleColor.Black;
         Console.Clear();
         var last = clock.Elapsed.TotalSeconds;
-        bool running = true;
 
-        while (running)
+        while (true)
         {
             var now = clock.Elapsed.TotalSeconds;
             var delta = Math.Min(0.1, now - last);
@@ -99,10 +113,13 @@ sealed class TrafficSimulation
             while (Console.KeyAvailable)
             {
                 var key = Console.ReadKey(true).Key;
+                if (key == ConsoleKey.R)
+                {
+                    return true;
+                }
                 if (key is ConsoleKey.Q or ConsoleKey.Escape)
                 {
-                    running = false;
-                    break;
+                    return false;
                 }
                 if (key == ConsoleKey.UpArrow)
                     timeScale += 1.0;
@@ -114,23 +131,38 @@ sealed class TrafficSimulation
                     carsPerSecond = Math.Max(0.1, carsPerSecond - 0.5);
             }
 
-            if (!running) break;
-
             Update(delta * timeScale);
             Render();
             Thread.Sleep(50);
         }
-
-        Console.ResetColor();
-        Console.CursorVisible = true;
-        Console.Clear();
-        Console.WriteLine("Traffic simulation ended.");
     }
 
     private void Update(double delta)
     {
         spawnTime += delta;
         simulatedSeconds += delta * 60;
+        phaseTimer += delta;
+
+        double currentPhaseDuration = phase switch
+        {
+            LightPhase.NorthSouthGreen or LightPhase.EastWestGreen => 8.0,
+            LightPhase.NorthSouthYellow or LightPhase.EastWestYellow => 3.0,
+            _ => 2.0
+        };
+        
+        if (phaseTimer >= currentPhaseDuration)
+        {
+            phaseTimer -= currentPhaseDuration;
+            phase = phase switch
+            {
+                LightPhase.NorthSouthGreen => LightPhase.NorthSouthYellow,
+                LightPhase.NorthSouthYellow => LightPhase.AllRed1,
+                LightPhase.AllRed1 => LightPhase.EastWestGreen,
+                LightPhase.EastWestGreen => LightPhase.EastWestYellow,
+                LightPhase.EastWestYellow => LightPhase.AllRed2,
+                _ => LightPhase.NorthSouthGreen
+            };
+        }
         
         double currentSpawnInterval = 1.0 / carsPerSecond;
         while (spawnTime >= currentSpawnInterval)
@@ -193,6 +225,28 @@ sealed class TrafficSimulation
         cars.Add(car);
     }
 
+    private ConsoleColor GetLightColor(Direction dir)
+    {
+        if (dir is Direction.North or Direction.South)
+        {
+            return phase switch
+            {
+                LightPhase.NorthSouthGreen => ConsoleColor.Green,
+                LightPhase.NorthSouthYellow => ConsoleColor.Yellow,
+                _ => ConsoleColor.Red
+            };
+        }
+        else
+        {
+            return phase switch
+            {
+                LightPhase.EastWestGreen => ConsoleColor.Green,
+                LightPhase.EastWestYellow => ConsoleColor.Yellow,
+                _ => ConsoleColor.Red
+            };
+        }
+    }
+
     private void UpdateCar(Car car, double delta)
     {
         if (car.State == CarState.Crashed)
@@ -200,28 +254,121 @@ sealed class TrafficSimulation
             return;
         }
 
-        bool obstacleAhead = false;
+        var distance = car.Speed * delta;
+        double closestDistance = double.MaxValue;
+
         foreach (var other in cars)
         {
             if (other == car) continue;
             
             if (other.CurrentDirection == car.CurrentDirection && other.Lane == car.Lane)
             {
-                if (car.CurrentDirection == Direction.North && other.Y < car.Y && other.Y > car.Y - 2.5) obstacleAhead = true;
-                if (car.CurrentDirection == Direction.South && other.Y > car.Y && other.Y < car.Y + 2.5) obstacleAhead = true;
-                if (car.CurrentDirection == Direction.East && other.X > car.X && other.X < car.X + 2.5) obstacleAhead = true;
-                if (car.CurrentDirection == Direction.West && other.X < car.X && other.X > car.X - 2.5) obstacleAhead = true;
+                if (car.CurrentDirection == Direction.North && other.Y < car.Y) closestDistance = Math.Min(closestDistance, car.Y - other.Y);
+                if (car.CurrentDirection == Direction.South && other.Y > car.Y) closestDistance = Math.Min(closestDistance, other.Y - car.Y);
+                if (car.CurrentDirection == Direction.East && other.X > car.X) closestDistance = Math.Min(closestDistance, other.X - car.X);
+                if (car.CurrentDirection == Direction.West && other.X < car.X) closestDistance = Math.Min(closestDistance, car.X - other.X);
             }
         }
 
-        if (obstacleAhead)
+        if (closestDistance <= distance + 1.0)
         {
-            car.State = CarState.Waiting;
-            return;
+            if (closestDistance > 1.0)
+            {
+                distance = closestDistance - 1.0;
+            }
+            else
+            {
+                car.State = CarState.Waiting;
+                return;
+            }
+        }
+
+        bool redLightStop = false;
+        bool yieldStop = false;
+        
+        ConsoleColor light = GetLightColor(car.CurrentDirection);
+        if (light != ConsoleColor.Green)
+        {
+            redLightStop = true;
+        }
+
+        if (light == ConsoleColor.Green && !car.HasTurned && car.Intent == TurnIntent.Left)
+        {
+            Direction opposite = (Direction)(((int)car.CurrentDirection + 2) % 4);
+            foreach (var other in cars)
+            {
+                if (other == car || other.State == CarState.Crashed) continue;
+                if (other.CurrentDirection == opposite && !other.HasTurned)
+                {
+                    double otherDist = other.CurrentDirection switch
+                    {
+                        Direction.North => other.Y - centerY,
+                        Direction.South => centerY - other.Y,
+                        Direction.East => centerX - other.X,
+                        Direction.West => other.X - centerX,
+                        _ => 0
+                    };
+                    
+                    if (otherDist > -roadHalfWidth && otherDist < roadHalfWidth + 8)
+                    {
+                        yieldStop = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if ((redLightStop || yieldStop) && !car.HasTurned)
+        {
+            double lineYNorth = centerY + roadHalfWidth + 1;
+            double lineYSouth = centerY - roadHalfWidth - 1;
+            double lineXEast = centerX - roadHalfWidth - 1;
+            double lineXWest = centerX + roadHalfWidth + 1;
+
+            bool beforeStopLine = car.CurrentDirection switch
+            {
+                Direction.North => car.Y >= lineYNorth,
+                Direction.South => car.Y <= lineYSouth,
+                Direction.East => car.X <= lineXEast,
+                Direction.West => car.X >= lineXWest,
+                _ => false
+            };
+
+            if (beforeStopLine)
+            {
+                if (car.CurrentDirection == Direction.North && car.Y - distance < lineYNorth)
+                {
+                    car.Y = lineYNorth;
+                    car.State = CarState.Waiting;
+                    return;
+                }
+                if (car.CurrentDirection == Direction.South && car.Y + distance > lineYSouth)
+                {
+                    car.Y = lineYSouth;
+                    car.State = CarState.Waiting;
+                    return;
+                }
+                if (car.CurrentDirection == Direction.East && car.X + distance > lineXEast)
+                {
+                    car.X = lineXEast;
+                    car.State = CarState.Waiting;
+                    return;
+                }
+                if (car.CurrentDirection == Direction.West && car.X - distance < lineXWest)
+                {
+                    car.X = lineXWest;
+                    car.State = CarState.Waiting;
+                    return;
+                }
+            }
+            else if (yieldStop)
+            {
+                car.State = CarState.Waiting;
+                return;
+            }
         }
 
         car.State = CarState.Moving;
-        var distance = car.Speed * delta;
 
         if (!car.HasTurned && car.Intent != TurnIntent.Straight)
         {
@@ -339,6 +486,11 @@ sealed class TrafficSimulation
         foreach (var car in cars)
             DrawCar(buffer, fColors, bColors, car);
 
+        if (mode == 1)
+        {
+            DrawCenterLights(buffer, fColors, bColors);
+        }
+
         Console.SetCursorPosition(0, 0);
         var sb = new StringBuilder();
         var currentFg = ConsoleColor.White;
@@ -422,11 +574,12 @@ sealed class TrafficSimulation
 
     private void DrawControls(char[,] buffer, ConsoleColor[,] fColors, ConsoleColor[,] bColors)
     {
-        DrawString(buffer, fColors, bColors, 0, 0, $"LANES: {lanes}   CARS: {cars.Count}", ConsoleColor.White, ConsoleColor.Black);
+        DrawString(buffer, fColors, bColors, 0, 0, $"LANES: {lanes}   CARS: {cars.Count}   MODE: {mode}", ConsoleColor.White, ConsoleColor.Black);
         DrawString(buffer, fColors, bColors, 0, 1, "CONTROLS:", ConsoleColor.White, ConsoleColor.Black);
         DrawString(buffer, fColors, bColors, 2, 2, "UP/DOWN    : SPEED", ConsoleColor.Gray, ConsoleColor.Black);
         DrawString(buffer, fColors, bColors, 2, 3, "LEFT/RIGHT : CARS/SEC", ConsoleColor.Gray, ConsoleColor.Black);
-        DrawString(buffer, fColors, bColors, 2, 4, "Q/ESC      : EXIT", ConsoleColor.Gray, ConsoleColor.Black);
+        DrawString(buffer, fColors, bColors, 2, 4, "R          : RESET/TITLE", ConsoleColor.Gray, ConsoleColor.Black);
+        DrawString(buffer, fColors, bColors, 2, 5, "Q/ESC      : EXIT", ConsoleColor.Gray, ConsoleColor.Black);
     }
 
     private void DrawString(char[,] buffer, ConsoleColor[,] fColors, ConsoleColor[,] bColors, int x, int y, string str, ConsoleColor fg, ConsoleColor bg)
@@ -438,6 +591,18 @@ sealed class TrafficSimulation
                 Put(buffer, fColors, bColors, x + i, y, str[i], fg, bg);
             }
         }
+    }
+
+    private void DrawCenterLights(char[,] buffer, ConsoleColor[,] fColors, ConsoleColor[,] bColors)
+    {
+        ConsoleColor nsColor = GetLightColor(Direction.North);
+        ConsoleColor ewColor = GetLightColor(Direction.East);
+
+        Put(buffer, fColors, bColors, centerX, centerY - 1, '●', nsColor, ConsoleColor.Black);
+        Put(buffer, fColors, bColors, centerX, centerY + 1, '●', nsColor, ConsoleColor.Black);
+        Put(buffer, fColors, bColors, centerX - 1, centerY, '●', ewColor, ConsoleColor.Black);
+        Put(buffer, fColors, bColors, centerX + 1, centerY, '●', ewColor, ConsoleColor.Black);
+        Put(buffer, fColors, bColors, centerX, centerY, '┼', ConsoleColor.DarkGray, ConsoleColor.Black);
     }
 
     private void DrawRoad(char[,] buffer, ConsoleColor[,] fColors, ConsoleColor[,] bColors)
@@ -523,23 +688,104 @@ static class Program
     {
         TryMaximizeWindow();
         Console.OutputEncoding = System.Text.Encoding.UTF8;
-        Console.CursorVisible = true;
-        Console.BackgroundColor = ConsoleColor.Black;
-        Console.Clear();
-        Console.ForegroundColor = ConsoleColor.Cyan;
-        Console.WriteLine("TRAFFIC INTERSECTION SIMULATOR");
-        Console.ForegroundColor = ConsoleColor.White;
-        Console.WriteLine("Configure the intersection before starting.");
-        Console.Write("Number of lanes per direction (1 to 4): ");
-        var input = Console.ReadLine();
-
-        if (!int.TryParse(input, out var lanes) || lanes is < 1 || lanes > 4)
+        
+        while (true)
         {
-            Console.WriteLine("Please enter a whole number from 1 to 4.");
-            return;
-        }
+            Console.CursorVisible = true;
+            Console.BackgroundColor = ConsoleColor.Black;
+            Console.Clear();
+            
+            int lanes = 0;
+            int mode = 0;
 
-        new TrafficSimulation(lanes).Run();
+            while (true)
+            {
+                Console.Clear();
+                
+                int screenW = Console.WindowWidth;
+                int screenH = Console.WindowHeight;
+                
+                int startX = Math.Max(0, (screenW - 85) / 2);
+                int startY = Math.Max(0, (screenH - 15) / 2);
+
+                DrawBox(startX, startY, 35, 12);
+                Console.SetCursorPosition(startX + 2, startY + 2);
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.Write("INTERSECTION CONFIGURATION");
+                
+                Console.ForegroundColor = ConsoleColor.White;
+                Console.SetCursorPosition(startX + 2, startY + 5);
+                Console.Write("Number of lanes (1 to 4): ");
+                
+                DrawBox(startX + 40, startY, 45, 12);
+                Console.SetCursorPosition(startX + 42, startY + 2);
+                Console.ForegroundColor = ConsoleColor.Cyan;
+                Console.Write("AVAILABLE MODES");
+                
+                Console.ForegroundColor = ConsoleColor.White;
+                Console.SetCursorPosition(startX + 42, startY + 5);
+                Console.Write("[1] CENTER HANGING LIGHTS");
+                Console.SetCursorPosition(startX + 42, startY + 7);
+                Console.ForegroundColor = ConsoleColor.Gray;
+                Console.Write("A classic intersection mode featuring");
+                Console.SetCursorPosition(startX + 42, startY + 8);
+                Console.Write("a central four way signal cluster");
+                Console.SetCursorPosition(startX + 42, startY + 9);
+                Console.Write("suspended directly above traffic.");
+                
+                Console.SetCursorPosition(startX + 28, startY + 5);
+                Console.ForegroundColor = ConsoleColor.White;
+                var laneInput = Console.ReadLine();
+                
+                if (!int.TryParse(laneInput, out lanes) || lanes < 1 || lanes > 4)
+                {
+                    continue;
+                }
+                
+                Console.SetCursorPosition(startX + 2, startY + 7);
+                Console.Write("Select Mode (1): ");
+                var modeInput = Console.ReadLine();
+                
+                if (!int.TryParse(modeInput, out mode) || mode != 1)
+                {
+                    continue;
+                }
+                
+                break;
+            }
+
+            bool restart = new TrafficSimulation(lanes, mode).Run();
+            if (!restart)
+            {
+                break;
+            }
+        }
+        
+        Console.ResetColor();
+        Console.CursorVisible = true;
+        Console.Clear();
+        Console.WriteLine("Traffic simulation ended.");
+    }
+
+    private static void DrawBox(int x, int y, int width, int height)
+    {
+        if (x < 0 || y < 0 || x + width >= Console.BufferWidth || y + height >= Console.BufferHeight) return;
+        
+        Console.ForegroundColor = ConsoleColor.DarkGray;
+        for (int i = 0; i < width; i++)
+        {
+            Console.SetCursorPosition(x + i, y);
+            Console.Write(i == 0 ? '┌' : i == width - 1 ? '┐' : '─');
+            Console.SetCursorPosition(x + i, y + height - 1);
+            Console.Write(i == 0 ? '└' : i == width - 1 ? '┘' : '─');
+        }
+        for (int i = 1; i < height - 1; i++)
+        {
+            Console.SetCursorPosition(x, y + i);
+            Console.Write('│');
+            Console.SetCursorPosition(x + width - 1, y + i);
+            Console.Write('│');
+        }
     }
 
     private static void TryMaximizeWindow()
